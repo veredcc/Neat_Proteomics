@@ -77,16 +77,43 @@ clean_raw_data = function(raw_data) {
   
 }
 
-extract_protein_name = function(df, reg_expr = "(?<=\\s).*(?=.OS)") {
+#extract_protein_name = function(df, reg_expr = "(?<=\\s).*(?=.OS)") {
+#  
+#  # default reg_expr starts from the first space ('\\s') until 'OS'
+#  
+#  # we use regular expression to extract the protein names
+#  regex = regexpr(reg_expr, df$Fasta.headers, perl = TRUE)
+#  
+#  # return the matching header for each protein
+#  return (regmatches(df$Fasta.headers, regex))
+#}
+
+extract_protein_name <- function(df, REF_DB) {  #new, 26.12.2024. need to be tested on uniprot and genbank
   
-  # default reg_expr starts from the first space ('\\s') until 'OS'
+  # Define regex patterns for each type
+  regex_patterns <- list(
+    uniprot = "(?<=\\s).*(?=.OS)",   # Try also (?<=\\s).*(?=\\sOS=), perhaps it is better
+    genbank = "(?<=\\|)[^|]+$",      # NOT YET TESTED Adjust if needed for GenBank format specifics
+    refseq = "(?<=\\s).*?(?=\\s\\[)" # Extract text after first space until before the species info in brackets
+  )
   
-  # we use regular expression to extract the protein names
-  regex = regexpr(reg_expr, df$Fasta.headers, perl = TRUE)
+  # Select the appropriate regex based on the fasta_title_type
+  if (!REF_DB %in% names(regex_patterns)) {
+    stop("Invalid REF_DB. Choose from: 'uniprot', 'genbank', 'refseq'.")
+  }
   
-  # return the matching header for each protein
-  return (regmatches(df$Fasta.headers, regex))
+  reg_expr <- regex_patterns[[REF_DB]]
+  
+  # Apply the regex to extract the protein name
+  regex <- regexpr(reg_expr, df$Fasta.headers, perl = TRUE)
+  matches <- regmatches(df$Fasta.headers, regex)
+  
+  # Return the matches
+  return(matches)
 }
+
+
+
 
 #get measurments (intensity, LFQ, nr. peptides) per sample
 
@@ -108,10 +135,25 @@ get_measurements_per_sample = function (df, measurement_prefix) {
   }
   
   #set new sample names (according to samples data frame)
-  colnames(df_m) = samples$SampleID[match(colnames(df_m), samples$Sample_orig_name)]
+  
+  #remove leading X from sample orig names (if exists). These Xs are added during import of the Samples.txt file if sample names start with digits.
+  sample_orig_names = samples$Sample_orig_name
+  if (all(grepl("^X", sample_orig_names))) {
+    # Remove the leading "X" from each value
+    sample_orig_names <- sub("^X", "", sample_orig_names)
+  }
+  
+  #set new sample names
+  colnames(df_m) = samples$SampleID[match(colnames(df_m), sample_orig_names)]
   
   #reorder samples according to experiment design (according to $sampleID column in experiment design data frame)
-  df_m1 = df_m[,as.character(col_data$SampleID)]
+  
+  #add leading Xs to SampleID from col_data if df_m col names start with Xs
+  
+  col_data_sampleID = make.names(col_data$SampleID)
+  
+  #now reorder samples
+  df_m1 = df_m[,as.character(col_data_sampleID)]
   
   return (df_m1)
 }
@@ -202,7 +244,10 @@ generate_design_model = function(col_data, DESIGN_TYPE = 'simple') {
         
   } else if (DESIGN_TYPE == 'batch') {
     
-    batch = factor(as.character(col_data[,BATCH_FACTOR]), levels=batches)  #batches are defined in the main program
+    batch_values = col_data[,BATCH_FACTOR] %>%
+      as.character %>%
+      make.names
+    batch = factor(batch_values, levels=batches)  #batches are defined in the main program
     
     design <- model.matrix(~ 0+cond+batch)  
     
@@ -923,6 +968,12 @@ draw_LFQ_histograms = function(df_m, plots_dir) {
   
   Log2.data = df_m %>% gather("Condition", "Intensity")
   Log2.data = Log2.data[is.finite(Log2.data$Intensity),]
+  
+  #remove leading X from Condition (if exists).
+  if (all(grepl("^X", names(df_m)))) {
+    # Remove the leading "X" from each value oc Condition
+    Log2.data$Condition <- sub("^X", "", Log2.data$Condition)
+  }
     
   # Create labels
   Log2.data = Log2.data %>%
@@ -957,6 +1008,12 @@ draw_LFQ_boxplots = function(df_m, plots_dir) {
   
   Log2.data = df_m %>% gather("Condition", "Intensity")
   Log2.data = Log2.data[is.finite(Log2.data$Intensity),]
+  
+  #remove leading X from Condition (if exists).
+  if (all(grepl("^X", names(df_m)))) {
+    # Remove the leading "X" from each value oc Condition
+    Log2.data$Condition <- sub("^X", "", Log2.data$Condition)
+  }
   
   Log2.data = mutate(Log2.data, Condition_name = Condition) %>%
     mutate(Condition = get_conditions_from_samples(Condition_name))

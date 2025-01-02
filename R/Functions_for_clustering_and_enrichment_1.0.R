@@ -65,9 +65,53 @@ calc_pattern_1s_pass_min_counts = function (expr_data, patterns, replicates_stru
     names(a) = passes_col_name
     passes = cbind(passes, a)
   }
-  
   return (passes)  
+}
+
+calc_pattern_1s_and_0s_pass_counts_cutoffs = function(expr_data, patterns, replicates_structure, count_cutoff, count_cutoff_low) {
   
+  # Create a matrix based on the norm counts.
+  # Every gene is marked "TRUE" for a pattern if:
+  # - All samples that have to be "1" according to the pattern have counts > count_cutoff
+  # - All samples that have to be "0" according to the pattern have counts < count_cutoff_low
+  
+  pattern_length = nchar(patterns[1])
+  
+  # Initialize results table by just taking row names
+  passes = expr_data %>% as.data.frame() %>% select(starts_with("999")) 
+  
+  calc_pass = function(x) {  #receives an expression pattern per gene      
+    # Boolean vector for whether each element of the expression pattern meets the count_cutoff or count_cutoff_low condition
+    bool_vec_high = x > count_cutoff
+    bool_vec_low = x < count_cutoff_low
+    
+    # Indices for "1" and "0" positions in the pattern
+    indexes_1 = which(pat1 == 1)  # indexes of samples which has to be 1 according to the pattern
+    indexes_0 = which(pat1 == 0)  # indexes of samples which has to be 0 according to the pattern
+    
+    # Check conditions for both "1" and "0"
+    #if all the samples which has to be 1 have true in the vector that checks expression above cutoff, and same for 0
+    all(bool_vec_high[indexes_1]) && all(bool_vec_low[indexes_0])
+  }
+  
+  for (pattern in patterns) {
+    # Skip patterns "0000" and "1111"
+    if (pattern == paste(rep(0, pattern_length), collapse ="") || pattern == paste(rep(1, pattern_length), collapse ="")) next
+    
+    # Convert pattern to vector, e.g., "101" -> c(1, 0, 1)
+    pat = str_split(pattern, "") %>% unlist() %>% strtoi()
+    
+    # Match to replicate structure, e.g., "101" -> "111000111"
+    pat1 = rep(pat, replicates_structure)
+    
+    # Apply function to check conditions for each gene
+    a = apply(expr_data, 1, calc_pass) %>% as.data.frame()  # 1 means apply function on rows
+    passes_col_name = paste0("_", pattern)
+    names(a) = passes_col_name
+    passes = cbind(passes, a)
+  }
+  
+  return(passes)
 }
 
 calc_correlations_to_expression_patterns = function (expr_data, patterns, replicates_structure) {
@@ -98,7 +142,7 @@ calc_correlations_to_expression_patterns = function (expr_data, patterns, replic
   
 }
 
-calc_best_pattern_per_gene = function (corrs, CORR_CUTOFF=0.8, result_file_name, stats_file_name, passes) {
+calc_best_pattern_per_gene = function (corrs, CORR_CUTOFF=0.8, result_file_name, stats_file_name, passes, passes1) {
   
   #create matrix indicating only correlations above cutoff, no. of patterns above cutoff, and the best pattern
   #best pattern is the pattern with the max. correlation, if the correlation is above the cutoff
@@ -130,7 +174,8 @@ calc_best_pattern_per_gene = function (corrs, CORR_CUTOFF=0.8, result_file_name,
   corrs2 = as.data.frame (ifelse(corrs1 > CORR_CUTOFF, corrs1, NA))
   corrs2$nr_patterns  = apply(corrs, 1, function (x) sum(x>CORR_CUTOFF))
   corrs2$best_pattern = apply(corrs, 1, get_pattern)
-  corrs2$best_pattern_pass_counts_cutoff = apply(cbind(passes, best_pattern=corrs2$best_pattern), 1, check_pass)
+  corrs2$best_pattern_pass_counts_cutoff = apply(cbind(passes,   best_pattern=corrs2$best_pattern), 1, check_pass)
+  corrs2$best_pattern_pass_counts_cutoff1 = apply(cbind(passes1, best_pattern=corrs2$best_pattern), 1, check_pass)
   
   #print corrs2
   
@@ -146,20 +191,38 @@ calc_best_pattern_per_gene = function (corrs, CORR_CUTOFF=0.8, result_file_name,
   corr2_stats_with_counts_cutoff = table(corrs2$best_pattern_pass_counts_cutoff)
   cat ("No. genes passing counts cutoff")
   print (corr2_stats_with_counts_cutoff)
+
+  corr2_stats_with_counts_cutoff1 = table(corrs2$best_pattern_pass_counts_cutoff1)
+  cat ("No. genes passing counts cutoff1")
+  print (corr2_stats_with_counts_cutoff1)
+    
+  #bad code since it uses cbind
+  #corr2_stats_merged = as.data.frame(cbind(corr2_stats, corr2_stats_with_counts_cutoff, corr2_stats_with_counts_cutoff1))
+  #corr2_stats_merged$Pattern = rownames(corr2_stats_merged)
+  #corr2_stats_merged = corr2_stats_merged[,c(3,1,2)]
+  #colnames(corr2_stats_merged) = c("Pattern", "No._genes", "No._genes_passing_counts_cutoff")
   
-  corr2_stats_merged = as.data.frame(cbind(corr2_stats, corr2_stats_with_counts_cutoff))
+  #fixed code, using left_join (31.12.2024)
+
+  # Convert named vectors to data frames
+  df_corr2_stats                     <- data.frame(Pattern = names(corr2_stats),                     No._genes = as.numeric(corr2_stats), stringsAsFactors = FALSE)
+  df_corr2_stats_with_counts_cutoff  <- data.frame(Pattern = names(corr2_stats_with_counts_cutoff),  No._genes_passing_counts_cutoff = as.numeric(corr2_stats_with_counts_cutoff), stringsAsFactors = FALSE)
+  df_corr2_stats_with_counts_cutoff1 <- data.frame(Pattern = names(corr2_stats_with_counts_cutoff1), No._genes_passing_counts_cutoff1 = as.numeric(corr2_stats_with_counts_cutoff1), stringsAsFactors = FALSE)
   
-  corr2_stats_merged$Pattern = rownames(corr2_stats_merged)
+  # Perform left joins
+  corr2_stats_merged <- df_corr2_stats %>%
+    left_join(df_corr2_stats_with_counts_cutoff, by = "Pattern") %>%
+    left_join(df_corr2_stats_with_counts_cutoff1, by = "Pattern")
   
-  corr2_stats_merged = corr2_stats_merged[,c(3,1,2)]
-  
-  colnames(corr2_stats_merged) = c("Pattern", "No._genes", "No._genes_passing_counts_cutoff")
+  # View the merged data frame
+  print(corr2_stats_merged)
   
   write.table(x = corr2_stats_merged,
               file = stats_file_name,
               quote = F,
               sep = "\t",
-              row.names = F)
+              row.names = F,
+              na = "0")
   
   return (list(corrs2=corrs2, binary_patterns_stats=corr2_stats_merged))
 }
@@ -1371,6 +1434,31 @@ plot_cluster_profiles<-function(clusters,mat2plot,col_data, color_group=c('Type'
   #Clustering_Plot = clusters_plots[[1]]
   
   ggsave(out_file,Clustering_Plot,dpi = 600, width = 6.99, height =3.99, units = "in")
+  
+  #export data behind plot
+  
+  out_file2 = str_replace(out_file, ".pdf", "_data.txt")
+  
+  for (i in sort(unique(clusters))){
+    out_file3 = str_replace(out_file, ".pdf", paste0("_cluster", i, "_data.txt"))
+    Df1 = plot_list[[i]]$data %>% select(Group = Time, Exp = EXP)
+    export_table(Df1, out_file3)  #optional
+    se_by_group    = Df1 %>% group_by(Group) %>% summarise(Mean = mean(Exp), SE = sd(Exp)/sqrt(length(Exp)), Mean_SE = mean_se(Exp))%>% as.data.frame
+    se_by_group = cbind (Cluster = i, se_by_group)
+    if (i==1) {
+      summary_df = se_by_group
+    } else {
+      summary_df = rbind(summary_df, se_by_group)
+    }
+  }
+  
+  write.table(x = summary_df,
+              file = out_file2,
+              quote = F,
+              sep = "\t",
+              na = "",
+              row.names = F,
+              col.names = T)
   
   #return(list(Clustering_Plot))
   return(Clustering_Plot)

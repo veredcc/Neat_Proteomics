@@ -95,6 +95,8 @@ LFQ_histograms_dir      = file.path(plots_dir,   "LFQ_Histograms")        %>% cr
 LFQ_data_unimputed_file                       = file.path(datasets_dir, "LFQ_data_unimputed.txt")
 filtered_imputed_proteinGroups_file           = file.path(datasets_dir, "Filtered_imputed_data_once.txt")
 filtered_imputed_batch_corrected_file         = file.path(datasets_dir, "Filt_imput_batch_corr_data.txt")
+protein_expression_wo_stats_file              = file.path(results_dir,  "Protein_expression_wo_stats.txt")
+protein_expression_wo_stats_file_batch_corr   = file.path(results_dir,  "Protein_expression_wo_stats_batch_corr.txt")
 Imputed_data_file_prefix                      = file.path(imputed_repetitions_dir, "Imputed")
 Limma_results_once_file                       = file.path(datasets_dir, "Limma_results_once.txt")
 Limma_results_all_imputations_file            = file.path(datasets_dir, "Limma_results_mult_imput.txt")
@@ -125,22 +127,6 @@ samples = import_samples (samples_file)
 # Read design file
 col_data = import_col_data (experiment_design_file)
 
-conditions = unique(as.character(col_data[, 'Condition']))  #this preserves the original order of the levels
-if(DESIGN_TYPE %in% c('batch', 'batch-multi_level', 'batch_and_interaction')) {
-  batches = unique(as.character(col_data[, BATCH_FACTOR]))
-}
-
-Log2.names <- list()
-for (condition in conditions) {
-  sample_ids <- col_data %>% 
-    filter(Condition == condition) %>% 
-    select(SampleID) %>% 
-    unlist %>%
-    as.character
-  cond_names <- list(sample_ids)
-  Log2.names <- c(Log2.names, cond_names)
-}
-
 # Read contrasts file
 contrasts_data <- import_data (contrasts_file)
 
@@ -162,7 +148,7 @@ df = clean_raw_data(raw_data)
 
 ```{r filter_coldata}
 
-outlier_samples = c("Control.DY379", "NAM7mM.DY379")
+outlier_samples = c("19.1498_positive")
 
 #remove outlier samples from col_data and from the df dataset
 
@@ -183,6 +169,31 @@ df = remove_samples_from_dataset (df, outlier_samples)
 ```{r subset_and_reorder}
 
 #df = match_df_to_col_data (df, col_data)  ###Vered 8.2.2022 Need to write the function. Currently I only put there code from the DESeq2 functions!!!
+
+```
+
+## Prepare some variables related to experiment design
+
+```{r more_for_exp_design}
+
+conditions = unique(as.character(col_data[, 'Condition']))  #this preserves the original order of the levels
+
+Log2.names <- list()
+for (condition in conditions) {
+  sample_ids <- col_data %>% 
+    filter(Condition == condition) %>% 
+    select(SampleID) %>% 
+    unlist %>%
+    as.character %>%
+    make.names
+  
+  cond_names <- list(sample_ids)
+  Log2.names <- c(Log2.names, cond_names)
+}
+
+if(DESIGN_TYPE %in% c('batch', 'batch-multi_level', 'batch_and_interaction')) {
+  batches = make.names(unique(as.character(col_data[, BATCH_FACTOR])))
+}
 
 ```
 
@@ -207,8 +218,10 @@ df$Fasta.headers = sub(";.*", "", df$Fasta.headers)  #remove everything after th
 #so in the arabidopsis ref we take the text that is between _ARATH and OS, without the spaces (here called .) before and after it.
 #read about R regular expressions with perl=TRUE: http://www.pcre.org/original/doc/html/pcrepattern.html
 
+#26.12.2024 I adjusted the code to handle genbank and refseq fasta titles in addition to uniprot. still need to check it.
+
 #specie_regexpr = "(?<=\\s).*(?=.OS)"
-df$Protein.name = extract_protein_name(df)
+df$Protein.name = extract_protein_name(df, REF_DB)
 
 #for generic regexpr template don't include parameter 'reg_expr' when calling 'extract_protein_name' function
 #for brassica multi species (BRACM, BRACR, BRARP) ref: specie_regexpr = "(?<=_BRA.. ).*(?=.OS)"
@@ -435,6 +448,37 @@ if (REMOVE_BATCH_EFFECT){
   
   export_table (df.FIbatch_corr, filtered_imputed_batch_corrected_file)
 }
+
+```
+# Export protein expression results incl. group averages
+
+```{r group_averages}
+
+#compute group averages for imputed data
+
+group_means = compute_group_means (df.FI, col_data) %>% as.data.frame %>% rownames_to_column (var="Protein")
+
+#compute group averages for batch-corrected data
+
+if (REMOVE_BATCH_EFFECT){
+  group_means_batch_corr = compute_group_means (df.FIbatch_corr, col_data)  %>% as.data.frame %>% rownames_to_column (var="Protein")
+}
+
+#prepare and export protein expression file
+
+expr_df    = data.frame(Protein=rownames(df.Fd))  #create a dataframe with one colum which is row names of df.Fd
+df_annot1 = rownames_to_column (df_annot, var="Protein")
+expr_df1 = left_join(x=expr_df, y=df_annot1, by=c("Protein"))
+expr_df2 = cbind(expr_df1, signif(df.Fd, digits=5)) #add log2 LFQ data from df.Fd (after taking only 5 significant digits)
+
+expression_results            = left_join(x=res_df2, y=group_means, by=c("Protein"))
+export_table (expression_results, protein_expression_wo_stats_file)
+
+if (REMOVE_BATCH_EFFECT){
+  expression_results_batch_corr = left_join(x=res_df2, y=group_means_batch_corr, by=c("Protein"))
+  export_table (expression_results_batch_corr, protein_expression_wo_stats_file_batch_corr)
+}
+
 
 ```
 

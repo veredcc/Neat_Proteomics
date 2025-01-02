@@ -10,6 +10,8 @@ project_name = "Proj_A"
 
 analysis_round = "Analysis_01"
 
+REF_DB = "uniprot" #proteome reference database used. options: uniprot, genbank, refseq
+
 EXPORT_INTERMEDIATE_FILES = TRUE #(T or F)
 
 ##### Filtering #####
