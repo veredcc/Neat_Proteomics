@@ -564,7 +564,8 @@ Clusters_Enrichment_Test=function(Type, clusters,TERM2NAME,TERM2GENE, outDir, fi
       )
       
       #store results in allRes0 list
-      if (length(res)>0){
+      #if (length(res)>0){  #6.1.2025 in case that there are enriched pathways but none had p.adj < 0.05, this condition will give TRUE while still the result table will have no results. This will cause error later in the code
+      if (nrow(res@result) > 0 && nrow(res@result[res@result$p.adjust < pvalueCutoff,]) > 0)   { #changed on 6.1.2025. was told that simply writing nrow(res) is unreliable
         allRes0[[as.character(cluster_name)]]<-res
       }
     }
